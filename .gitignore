@@ -1,0 +1,3 @@
+data/produccion.csv
+models/*.joblib
+models/*.joblib

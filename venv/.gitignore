@@ -1,0 +1,30 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Environment variables
+.env
+
+# Local Jupyter runtime
+.jupyter_runtime/
+
+# Dataset
+data/*.csv
+
+# Trained models
+models/*.joblib
+
+# OS
+.DS_Store
+Thumbs.db
