@@ -1,0 +1,21 @@
+{
+  "provenance": {
+    "status": "historical_exploratory_notebook_result",
+    "source": "notebooks/02_modelo.ipynb",
+    "source_cells": {
+      "without_history": 6,
+      "with_lag1": 13,
+      "by_month": 14
+    },
+    "dataset": "Produccion de petroleo y gas por pozo (Capitulo IV)",
+    "dataset_url": "https://datos.gob.ar/ar/dataset/energia-produccion-petroleo-gas-por-pozo-capitulo-iv",
+    "validation_note": "Legacy notebook split by calendar-month values 10, 11 and 12. These are not the source-of-truth metrics produced by the stricter complete-date training pipeline."
+  },
+  "without_history": {"mae": 142.71, "rmse": 470.91, "r2": 0.4549},
+  "with_lag1": {"mae": 44.46, "rmse": 241.10, "r2": 0.8562},
+  "by_month": [
+    {"month": 10, "records": 23233, "mae": 43.76, "rmse": 250.50, "r2": 0.85},
+    {"month": 11, "records": 23053, "mae": 43.69, "rmse": 224.61, "r2": 0.86},
+    {"month": 12, "records": 23086, "mae": 45.93, "rmse": 247.29, "r2": 0.86}
+  ]
+}
