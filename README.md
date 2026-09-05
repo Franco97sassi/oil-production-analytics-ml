@@ -1,5 +1,7 @@
 # 🛢️ Oil Production Analytics & Machine Learning
 
+[![CI](https://github.com/francosassi/oil-production-analytics-ml/actions/workflows/ci.yml/badge.svg)](https://github.com/francosassi/oil-production-analytics-ml/actions/workflows/ci.yml)
+
 End-to-end **Data Analytics and Machine Learning project** focused on analyzing and predicting monthly oil production using public hydrocarbon production data from Argentina.
 
 The project covers the complete workflow from exploratory data analysis and feature engineering to temporal validation, model evaluation, serialization, and deployment through a REST API.
@@ -159,7 +161,7 @@ RandomForestRegressor(
 
 ## 📈 Model Performance
 
-### Model without production history
+### Historical notebook benchmark: model without production history
 
 | Metric | Result |
 |---|---:|
@@ -167,7 +169,7 @@ RandomForestRegressor(
 | RMSE | 470.91 |
 | R² | 0.4549 |
 
-### Final model with `prod_pet_lag1`
+### Historical notebook benchmark: model with `prod_pet_lag1`
 
 | Metric | Result |
 |---|---:|
@@ -187,9 +189,20 @@ Adding historical production substantially improved model performance.
 
 Performance remained relatively stable across all three future test months.
 
-> These published figures are the original notebook result. Running
-> `python -m src.train` regenerates the evaluation using the stricter complete-
-> date split and saves the new source-of-truth metrics in `reports/metrics.json`.
+> **Metric provenance:** these figures are historical exploratory results stored
+> in `notebooks/02_modelo.ipynb`; that notebook split on the calendar-month
+> values 10, 11 and 12. They must not be presented as the result of the stricter
+> complete-date pipeline. Their machine-readable transcription, record counts,
+> source cells and dataset provenance live in
+> [`docs/metrics/notebook_metrics.json`](docs/metrics/notebook_metrics.json).
+> CI verifies that the JSON and saved notebook outputs remain identical with
+> `python scripts/audit_published_metrics.py`.
+
+Running `python -m src.train` performs the current, stricter evaluation and
+writes its source-of-truth periods, cutoff, baselines, segmented metrics, drift
+diagnostics and prediction interval to `reports/metrics.json`. Generated reports
+remain local because they depend on the user's downloaded dataset; they should
+not be confused with the committed historical benchmark.
 
 ---
 
@@ -325,8 +338,13 @@ source venv/bin/activate
 ### 4. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-ci.txt
 ```
+
+The supported interpreter is Python 3.12, declared in `.python-version` and
+used by CI. All direct runtime, analysis and test dependencies are pinned in the
+UTF-8 encoded `requirements-ci.txt`, so local and CI runs resolve the same declared
+versions.
 
 ### 5. Download and train
 
@@ -542,7 +560,6 @@ Possible extensions include:
 - Rolling production averages
 - MLflow experiment tracking
 - Docker
-- GitHub Actions continuous integration
 - Calibrated conformal prediction intervals
 - Automated production drift alerts
 - Cloud deployment
