@@ -16,6 +16,9 @@ env/
 data/*.csv
 data/*.db
 models/*.joblib
+reports/*.csv
+reports/*.json
+reports/*.png
 
 # Environment and editor
 .env

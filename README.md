@@ -120,14 +120,18 @@ This feature significantly improved predictive performance.
 
 ## ⏱️ Temporal Validation
 
-Instead of relying only on a random train/test split, the final model uses a **temporal validation strategy**.
+Instead of a random split, the reproducible training script builds a complete
+date from `anio` and `mes`, orders observations by well and date, and reserves
+the final three observed calendar months as a **future temporal holdout**.
 
 ```text
-Months 1–9   → Training
-Months 10–12 → Testing
+All dates before the cutoff → Training
+Final 3 calendar months     → Testing
 ```
 
-This provides a more realistic evaluation by training the model using historical observations and testing it on later periods.
+This prevents records from a later year entering training merely because their
+calendar month is between January and September. A lag is retained only when
+the previous observation for that well is exactly one calendar month earlier.
 
 The final model represents a **one-step-ahead prediction scenario**, meaning that the previous month's actual production is available when predicting the following month.
 
@@ -135,7 +139,7 @@ The final model represents a **one-step-ahead prediction scenario**, meaning tha
 
 ## 🌲 Model
 
-The final model is a:
+The original notebook model is a:
 
 **Random Forest Regressor**
 
@@ -183,6 +187,10 @@ Adding historical production substantially improved model performance.
 
 Performance remained relatively stable across all three future test months.
 
+> These published figures are the original notebook result. Running
+> `python -m src.train` regenerates the evaluation using the stricter complete-
+> date split and saves the new source-of-truth metrics in `reports/metrics.json`.
+
 ---
 
 ## 📉 Baseline Comparison
@@ -215,22 +223,33 @@ The analysis also showed that models without historical production tended to und
 
 ## 🏗️ Project Architecture
 
+![Arquitectura del proyecto](docs/architecture.svg)
+
+El entrenamiento y la evaluación son procesos **offline**. La API es un
+proceso **online** separado que solamente carga el artefacto y sirve
+predicciones; nunca reentrena durante una petición.
+
 ```text
-ypf-data-ml/
+oil-production-analytics-ml/
 │
-├── data/
-│   └── produccion.csv
-│
-├── models/
-│   └── modelo_produccion_petroleo.joblib
-│
+├── data/                         # local; datos grandes no versionados
+├── docs/                         # arquitectura en formato SVG de texto
+├── models/                       # artefactos locales de entrenamiento
 ├── notebooks/
 │   ├── 01_exploracion.ipynb
 │   └── 02_modelo.ipynb
-│
+├── powerbi/
+│   └── ypf_production_dashboard.pbix
+├── reports/                      # métricas y gráficos generados
+├── sql/
+│   ├── analytics_queries.sql
+│   ├── schema.sql
+│   └── views.sql
 ├── src/
-│   └── main.py
-│
+│   ├── load_sqlite.py
+│   ├── main.py                   # inferencia online
+│   └── train.py                  # entrenamiento offline
+├── tests/
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -309,6 +328,30 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 5. Download and train
+
+Download the official CSV linked in [Data Source](#-data-source), save it
+exactly as `data/produccion.csv`, and run:
+
+```bash
+python -m src.train
+```
+
+The command creates the deployable bundle in `models/` and writes auditable
+metrics, holdout predictions and plots in `reports/`. Optional XGBoost and SHAP
+support is installed and activated explicitly:
+
+```bash
+pip install "xgboost>=3,<4" "shap>=0.46,<1"
+python -m src.train --include-xgboost --with-shap
+```
+
+To build the analytical SQLite database and its Power BI views:
+
+```bash
+python -m src.load_sqlite
+```
+
 ---
 
 ## 🌐 REST API
@@ -347,7 +390,8 @@ Response:
 
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "model_loaded": true
 }
 ```
 
@@ -378,9 +422,17 @@ Example response:
 
 ```json
 {
-  "produccion_predicha": 54.91
+  "produccion_predicha": 54.91,
+  "intervalo_prediccion_90": {
+    "inferior": 48.21,
+    "superior": 61.84
+  }
 }
 ```
+
+The optional interval is derived from the 5% and 95% residual quantiles in the
+temporal holdout. It communicates empirical uncertainty, but is not a formal
+conditional-coverage guarantee.
 
 ---
 
@@ -431,6 +483,44 @@ Public Hydrocarbon Data
 
 ---
 
+## 🧭 Technical Decisions
+
+- **Offline training vs. online inference:** `src/train.py` owns data loading,
+  feature engineering, evaluation and serialization. `src/main.py` only
+  validates a request and invokes the serialized pipeline.
+- **Complete temporal key:** `anio` and `mes` become a first-of-month timestamp.
+  Sorting or splitting on `mes` alone is explicitly avoided.
+- **Consecutive lag:** `prod_pet_lag1` is created per `idpozo` only when the
+  preceding record is exactly one month earlier; gaps are not silently treated
+  as the previous month.
+- **Model comparison:** every run evaluates persistence
+  (`prediction = prod_pet_lag1`), mean, Random Forest and
+  HistGradientBoosting under the same holdout. XGBoost is an optional comparison
+  via `--include-xgboost` to avoid making it a mandatory runtime dependency.
+- **Selection:** the deployable trainable candidate with the lowest holdout MAE
+  is serialized. Persistence remains a required business baseline in the report.
+- **Segmented error:** the JSON report includes metrics by province, basin,
+  production range, and new versus previously observed wells.
+- **Uncertainty:** the artifact stores empirical 5%/95% holdout residual
+  quantiles and the API returns the resulting 90% diagnostic interval.
+- **Explainability:** `--with-shap` exports mean absolute SHAP importance when
+  the optional package is installed.
+- **Drift:** numeric PSI and categorical total-variation distance compare the
+  training and holdout populations. These are monitoring signals, not automatic
+  proof of model degradation.
+- **Operational assumption:** current-month injection and operating-time inputs
+  must be known or estimated at request time. For a true beginning-of-month
+  forecast, they should be replaced with lagged or planned values.
+
+## 📊 Generated Visuals
+
+To keep the Git history and pull request fully text-compatible, generated PNG
+plots are not committed. The offline script creates the real-vs-predicted and
+monthly-holdout charts locally in `reports/` on every training run; that folder
+is ignored by Git.
+
+---
+
 ## ⚠️ Limitations
 
 The final model uses the previous month's actual production (`prod_pet_lag1`) to estimate the following month's production.
@@ -445,16 +535,16 @@ Extremely high-production wells may also present greater prediction errors due t
 
 Possible extensions include:
 
-- XGBoost / LightGBM
+- LightGBM comparison
 - Hyperparameter optimization
 - TimeSeriesSplit
 - Additional lag features (`lag2`, `lag3`)
 - Rolling production averages
-- SHAP explainability
 - MLflow experiment tracking
 - Docker
-- Automated testing
-- Model monitoring and drift detection
+- GitHub Actions continuous integration
+- Calibrated conformal prediction intervals
+- Automated production drift alerts
 - Cloud deployment
 - Automated retraining pipeline
 

@@ -44,4 +44,4 @@ def test_empty_province():
 
     response = client.post("/predict", json=payload)
 
-    assert response.status_code in [422, 503]
+    assert response.status_code == 422

@@ -25,7 +25,7 @@ def load_model():
     return joblib.load(MODEL_PATH)
 
 
-modelo = load_model()
+model_bundle = load_model()
 
 
 class PredictionInput(BaseModel):
@@ -104,7 +104,7 @@ def root():
     return {
         "message": "Oil Production Prediction API",
         "status": "running",
-        "model_loaded": modelo is not None
+        "model_loaded": model_bundle is not None
     }
 
 
@@ -112,13 +112,13 @@ def root():
 def health():
     return {
         "status": "ok",
-        "model_loaded": modelo is not None
+        "model_loaded": model_bundle is not None
     }
 
 
 @app.post("/predict")
 def predict(data: PredictionInput):
-    if modelo is None:
+    if model_bundle is None:
         raise HTTPException(
             status_code=503,
             detail=(
@@ -129,8 +129,21 @@ def predict(data: PredictionInput):
 
     entrada = pd.DataFrame([data.model_dump()])
 
-    prediccion = modelo.predict(entrada)[0]
+    # New artifacts are bundles; accepting a bare estimator keeps old artifacts valid.
+    if isinstance(model_bundle, dict):
+        model = model_bundle["model"]
+        residual_quantiles = model_bundle.get("residual_quantiles")
+    else:
+        model = model_bundle
+        residual_quantiles = None
 
-    return {
-        "produccion_predicha": round(float(prediccion), 2)
-    }
+    prediccion = float(model.predict(entrada)[0])
+
+    response = {"produccion_predicha": round(prediccion, 2)}
+    if residual_quantiles:
+        response["intervalo_prediccion_90"] = {
+            "inferior": round(max(0.0, prediccion + residual_quantiles["lower"]), 2),
+            "superior": round(max(0.0, prediccion + residual_quantiles["upper"]), 2),
+        }
+
+    return response
