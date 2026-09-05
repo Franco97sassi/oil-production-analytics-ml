@@ -459,6 +459,59 @@ Possible extensions include:
 - Automated retraining pipeline
 
 ---
+## 📊 Data Source
+
+This project uses official public hydrocarbon production data published by the
+Argentine Government.
+
+- **Dataset:** Producción de petróleo y gas por pozo (Capítulo IV)
+- **Publisher:** Secretaría de Energía de la República Argentina
+- **Source:** Datos Argentina
+- **Granularity:** Monthly production by well, field, concession and province
+- **Update frequency:** Monthly
+- **Oil production (`prod_pet`):** m³
+- **Gas production (`prod_gas`):** thousands of m³
+- **Water production (`prod_agua`):** m³
+
+Official dataset:
+
+https://datos.gob.ar/ar/dataset/energia-produccion-petroleo-gas-por-pozo-capitulo-iv
+
+The raw dataset is not included in this repository due to its size.
+
+### Main variables used by the ML model
+
+| Variable | Description |
+|---|---|
+| `mes` | Calendar month (1–12) |
+| `iny_agua` | Water injection |
+| `iny_gas` | Gas injection |
+| `tef` | Effective operating time of the well |
+| `tipoextraccion` | Extraction method |
+| `tipoestado` | Operational status |
+| `tipopozo` | Well type |
+| `provincia` | Argentine province |
+| `cuenca` | Hydrocarbon basin |
+| `prod_pet_lag1` | Oil production from the previous monthly period |
+| `prod_pet` | Target variable: monthly oil production (m³) |
+
+### Reproducibility
+
+1. Download the dataset from the official source above.
+2. Save the CSV as:
+
+   `data/produccion.csv`
+
+3. Install the project dependencies.
+4. Run the preprocessing/training pipeline described in this repository.
+
+### Dataset License
+
+The source code of this repository is licensed under the MIT License.
+
+The dataset is provided by the Argentine Government and is not covered by
+this repository's MIT License. Usage of the dataset is subject to the terms
+of its original publisher.
 
 ## 👤 Author
 
