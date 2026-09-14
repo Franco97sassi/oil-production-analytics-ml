@@ -8,9 +8,9 @@ client = TestClient(main.app)
 
 VALID_PAYLOAD = {
     "mes": 10,
-    "iny_agua": 0,
-    "iny_gas": 0,
-    "tef": 31,
+    "iny_agua_lag1": 0,
+    "iny_gas_lag1": 0,
+    "tef_lag1": 31,
     "tipoextraccion": "Bombeo Mecánico",
     "tipoestado": "Extracción Efectiva",
     "tipopozo": "Petrolífero",

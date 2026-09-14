@@ -99,3 +99,31 @@ GROUP BY
     empresa,
     tipopozo,
     tipoextraccion;
+
+
+-- 8. Controles de calidad por período para auditar la fuente antes de modelar
+CREATE VIEW vw_calidad_datos_mensual AS
+SELECT
+    anio,
+    mes,
+    COUNT(*) AS cantidad_registros,
+    COUNT(DISTINCT idpozo) AS cantidad_pozos,
+    SUM(CASE WHEN idpozo IS NULL OR TRIM(idpozo) = '' THEN 1 ELSE 0 END)
+        AS idpozo_faltante,
+    SUM(CASE WHEN prod_pet IS NULL THEN 1 ELSE 0 END) AS produccion_faltante,
+    SUM(CASE WHEN prod_pet < 0 THEN 1 ELSE 0 END) AS produccion_negativa,
+    SUM(CASE WHEN tef < 0 OR tef > 31 THEN 1 ELSE 0 END) AS tef_fuera_de_rango,
+    COUNT(*) - COUNT(DISTINCT COALESCE(idpozo, '<NULL>') || '-' || anio || '-' || mes)
+        AS posibles_duplicados_pozo_mes
+FROM produccion
+GROUP BY anio, mes;
+
+
+-- Access paths are created after the bulk load (this file runs after to_sql).
+-- The source can contain revisions, so (idpozo, anio, mes) is intentionally
+-- indexed but not declared unique.
+CREATE INDEX idx_produccion_pozo_periodo ON produccion (idpozo, anio, mes);
+CREATE INDEX idx_produccion_periodo ON produccion (anio, mes);
+CREATE INDEX idx_produccion_provincia ON produccion (provincia);
+CREATE INDEX idx_produccion_cuenca ON produccion (cuenca);
+CREATE INDEX idx_produccion_empresa ON produccion (empresa);

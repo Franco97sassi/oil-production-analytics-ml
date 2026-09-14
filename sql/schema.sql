@@ -1,6 +1,7 @@
 DROP TABLE IF EXISTS produccion;
 
 CREATE TABLE produccion (
+    registro_id INTEGER PRIMARY KEY,
     idempresa TEXT,
     anio INTEGER,
     mes INTEGER,
@@ -53,5 +54,8 @@ CREATE TABLE produccion (
     subclasificacion TEXT,
     sub_tipo_recurso TEXT,
 
-    fecha_data DATE
+    fecha_data DATE,
+
+    CHECK (mes BETWEEN 1 AND 12),
+    CHECK (tef IS NULL OR tef >= 0)
 );
