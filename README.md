@@ -73,9 +73,9 @@ The initial model used operational, geographical and well characteristics such a
 
 ```text
 mes
-iny_agua
-iny_gas
-tef
+iny_agua_lag1
+iny_gas_lag1
+tef_lag1
 tipoextraccion
 tipoestado
 tipopozo
@@ -123,19 +123,38 @@ This feature significantly improved predictive performance.
 ## ⏱️ Temporal Validation
 
 Instead of a random split, the reproducible training script builds a complete
-date from `anio` and `mes`, orders observations by well and date, and reserves
-the final three observed calendar months as a **future temporal holdout**.
+date from `anio` and `mes`, orders observations by well and date, and creates
+four disjoint chronological periods. The final three observed calendar months
+are a **future temporal holdout** that is never used to choose the model or
+calibrate its interval.
 
 ```text
-All dates before the cutoff → Training
-Final 3 calendar months     → Testing
+Historical period          → Model fitting
+Next 3 calendar months     → Model selection by validation MAE
+Next 3 calendar months     → Conformal interval calibration
+Final 3 calendar months    → Untouched final test
 ```
 
 This prevents records from a later year entering training merely because their
 calendar month is between January and September. A lag is retained only when
 the previous observation for that well is exactly one calendar month earlier.
 
-The final model represents a **one-step-ahead prediction scenario**, meaning that the previous month's actual production is available when predicting the following month.
+### Prediction contract
+
+The model represents a **one-step-ahead forecast made before the target month
+starts**. Production, injection volumes and effective operating time all refer
+to the previous completed month (`*_lag1`); the target month's operational
+measurements are never model inputs. This prevents availability leakage. The API
+descriptions and model metadata make this contract explicit.
+
+### Prediction intervals
+
+The selected model is calibrated on a period that is separate from validation
+and final testing. The 90% intervals use finite-sample split conformal absolute
+residuals. They are conditioned on quartiles of `prod_pet_lag1` when each group
+has enough calibration observations, with a global conformal radius as a safe
+fallback. `reports/metrics.json` records calibration size and final-test
+coverage so the nominal 90% target can be audited rather than assumed.
 
 ---
 
@@ -208,7 +227,9 @@ not be confused with the committed historical benchmark.
 
 ## 📉 Baseline Comparison
 
-A `DummyRegressor` was used as a baseline to verify that the Machine Learning model was learning meaningful patterns.
+Two explicit baselines are evaluated: persistence (the previous month's
+production) and the training-set mean, equivalent to a mean-strategy
+`DummyRegressor`. They are implemented directly so their behavior is transparent.
 
 The Random Forest substantially outperformed the baseline across MAE, RMSE and R².
 
@@ -356,7 +377,9 @@ python -m src.train
 ```
 
 The command creates the deployable bundle in `models/` and writes auditable
-metrics, holdout predictions and plots in `reports/`. Optional XGBoost and SHAP
+validation and final-test metrics, holdout predictions, conformal coverage and
+plots in `reports/`. The default 3/3/3-month windows can be changed with
+`--validation-months`, `--calibration-months` and `--test-months`. Optional XGBoost and SHAP
 support is installed and activated explicitly:
 
 ```bash
@@ -419,14 +442,21 @@ Response:
 POST /predict
 ```
 
+The request represents a forecast made before the target month. Production,
+injection and effective-time fields all describe the previous completed month.
+
+For operational inspection, `GET /model-info` exposes the selected model,
+training cutoffs, expected features and interval method. Batch clients can use
+`POST /predict/batch` with between 1 and 1,000 observations.
+
 Example request:
 
 ```json
 {
   "mes": 10,
-  "iny_agua": 0,
-  "iny_gas": 0,
-  "tef": 31,
+  "iny_agua_lag1": 0,
+  "iny_gas_lag1": 0,
+  "tef_lag1": 31,
   "tipoextraccion": "Bombeo Mecánico",
   "tipoestado": "Extracción Efectiva",
   "tipopozo": "Petrolífero",
@@ -448,9 +478,10 @@ Example response:
 }
 ```
 
-The optional interval is derived from the 5% and 95% residual quantiles in the
-temporal holdout. It communicates empirical uncertainty, but is not a formal
-conditional-coverage guarantee.
+The optional interval uses the matching previous-production regime when that
+regime has enough calibration data; otherwise it falls back to the global
+split-conformal radius. Coverage is marginal within each calibrated regime, not
+a guarantee for every individual observation.
 
 ---
 
@@ -469,11 +500,11 @@ Public Hydrocarbon Data
           ↓
      Lag Features
           ↓
- Temporal Train/Test Split
+Train / Validation / Calibration / Test
           ↓
     Preprocessing
           ↓
-   Random Forest
+ Candidate Models
           ↓
  Model Evaluation
           ↓
@@ -508,27 +539,29 @@ Public Hydrocarbon Data
   validates a request and invokes the serialized pipeline.
 - **Complete temporal key:** `anio` and `mes` become a first-of-month timestamp.
   Sorting or splitting on `mes` alone is explicitly avoided.
-- **Consecutive lag:** `prod_pet_lag1` is created per `idpozo` only when the
+- **Consecutive lag:** production, injection and effective-time lags are created
+  per `idpozo` only when the
   preceding record is exactly one month earlier; gaps are not silently treated
   as the previous month.
-- **Model comparison:** every run evaluates persistence
+- **Model comparison:** validation evaluates persistence
   (`prediction = prod_pet_lag1`), mean, Random Forest and
-  HistGradientBoosting under the same holdout. XGBoost is an optional comparison
+  HistGradientBoosting in the same period. XGBoost is an optional comparison
   via `--include-xgboost` to avoid making it a mandatory runtime dependency.
-- **Selection:** the deployable trainable candidate with the lowest holdout MAE
-  is serialized. Persistence remains a required business baseline in the report.
+- **Selection:** the trainable candidate with the lowest validation MAE is
+  refitted on train plus validation and serialized. Calibration and final test
+  remain later, disjoint periods. Persistence remains a business baseline.
 - **Segmented error:** the JSON report includes metrics by province, basin,
   production range, and new versus previously observed wells.
-- **Uncertainty:** the artifact stores empirical 5%/95% holdout residual
-  quantiles and the API returns the resulting 90% diagnostic interval.
+- **Uncertainty:** a separate period calibrates 90% split-conformal radii by
+  previous-production regime, with a global fallback. Final-test coverage is
+  recorded in the report.
 - **Explainability:** `--with-shap` exports mean absolute SHAP importance when
   the optional package is installed.
 - **Drift:** numeric PSI and categorical total-variation distance compare the
   training and holdout populations. These are monitoring signals, not automatic
   proof of model degradation.
-- **Operational assumption:** current-month injection and operating-time inputs
-  must be known or estimated at request time. For a true beginning-of-month
-  forecast, they should be replaced with lagged or planned values.
+- **Operational assumption:** all production and operational measurements are
+  lagged; no target-month measurement is accepted by the forecast API.
 
 ## 📊 Generated Visuals
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,9 @@ TARGET = "prod_pet"
 ID_COLUMN = "idpozo"
 DATE_COLUMN = "fecha"
 LAG_COLUMN = "prod_pet_lag1"
-NUMERIC_FEATURES = ["mes", "iny_agua", "iny_gas", "tef", LAG_COLUMN]
+OPERATIONAL_COLUMNS = ["iny_agua", "iny_gas", "tef"]
+OPERATIONAL_LAG_COLUMNS = [f"{column}_lag1" for column in OPERATIONAL_COLUMNS]
+NUMERIC_FEATURES = ["mes", *OPERATIONAL_LAG_COLUMNS, LAG_COLUMN]
 CATEGORICAL_FEATURES = [
     "tipoextraccion",
     "tipoestado",
@@ -43,10 +46,12 @@ CATEGORICAL_FEATURES = [
 ]
 FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 REQUIRED_COLUMNS = [
-    "anio", "mes", ID_COLUMN, TARGET, "iny_agua", "iny_gas", "tef",
+    "anio", "mes", ID_COLUMN, TARGET, *OPERATIONAL_COLUMNS,
     *CATEGORICAL_FEATURES,
 ]
 RANDOM_STATE = 42
+INTERVAL_COVERAGE = 0.90
+MIN_CONDITIONAL_CALIBRATION_ROWS = 100
 
 
 def load_and_prepare(path: Path) -> pd.DataFrame:
@@ -62,12 +67,22 @@ def load_and_prepare(path: Path) -> pd.DataFrame:
         errors="coerce",
     )
     frame = frame.dropna(subset=[DATE_COLUMN, ID_COLUMN, TARGET])
+    duplicates = frame.duplicated([ID_COLUMN, DATE_COLUMN], keep=False)
+    if duplicates.any():
+        examples = frame.loc[duplicates, [ID_COLUMN, DATE_COLUMN]].head(5)
+        raise ValueError(
+            "Hay registros duplicados para el mismo pozo y mes; resolvé las "
+            f"revisiones antes de entrenar. Ejemplos: {examples.to_dict('records')}"
+        )
     frame = frame.sort_values([ID_COLUMN, DATE_COLUMN])
 
     previous_date = frame.groupby(ID_COLUMN, sort=False)[DATE_COLUMN].shift(1)
     previous_production = frame.groupby(ID_COLUMN, sort=False)[TARGET].shift(1)
     consecutive = frame[DATE_COLUMN].eq(previous_date + pd.offsets.MonthBegin(1))
     frame[LAG_COLUMN] = previous_production.where(consecutive)
+    for source, lagged in zip(OPERATIONAL_COLUMNS, OPERATIONAL_LAG_COLUMNS):
+        previous_value = frame.groupby(ID_COLUMN, sort=False)[source].shift(1)
+        frame[lagged] = previous_value.where(consecutive)
 
     frame = frame[(frame[TARGET] >= 0) & frame[LAG_COLUMN].notna()].copy()
     if frame.empty:
@@ -88,6 +103,107 @@ def temporal_split(
     if train.empty or test.empty:
         raise ValueError("El corte temporal produjo un conjunto vacío.")
     return train, test, cutoff
+
+
+def temporal_validation_split(
+    frame: pd.DataFrame,
+    validation_months: int = 3,
+    calibration_months: int = 3,
+    test_months: int = 3,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.Timestamp]]:
+    """Create disjoint train, model-selection, calibration and final-test periods."""
+    sizes = {
+        "validation_months": validation_months,
+        "calibration_months": calibration_months,
+        "test_months": test_months,
+    }
+    if any(value < 1 for value in sizes.values()):
+        raise ValueError("Cada período temporal debe contener al menos un mes.")
+    months = pd.Index(frame[DATE_COLUMN].dropna().sort_values().unique())
+    reserved = sum(sizes.values())
+    if len(months) <= reserved:
+        raise ValueError(
+            "Se necesitan más meses observados que la suma de validation, "
+            "calibration y test."
+        )
+    validation_cutoff = pd.Timestamp(months[-reserved])
+    calibration_cutoff = pd.Timestamp(months[-(calibration_months + test_months)])
+    test_cutoff = pd.Timestamp(months[-test_months])
+    train_frame = frame[frame[DATE_COLUMN] < validation_cutoff].copy()
+    validation_frame = frame[
+        (frame[DATE_COLUMN] >= validation_cutoff)
+        & (frame[DATE_COLUMN] < calibration_cutoff)
+    ].copy()
+    calibration_frame = frame[
+        (frame[DATE_COLUMN] >= calibration_cutoff)
+        & (frame[DATE_COLUMN] < test_cutoff)
+    ].copy()
+    test_frame = frame[frame[DATE_COLUMN] >= test_cutoff].copy()
+    return train_frame, validation_frame, calibration_frame, test_frame, {
+        "validation": validation_cutoff,
+        "calibration": calibration_cutoff,
+        "test": test_cutoff,
+    }
+
+
+def conformal_quantile(scores: np.ndarray, coverage: float = INTERVAL_COVERAGE) -> float:
+    """Finite-sample split-conformal quantile for absolute residual scores."""
+    clean = np.asarray(scores, dtype=float)
+    clean = clean[np.isfinite(clean)]
+    if clean.size == 0:
+        raise ValueError("No hay residuos válidos para calibrar el intervalo.")
+    rank = min(math.ceil((clean.size + 1) * coverage), clean.size)
+    return float(np.partition(clean, rank - 1)[rank - 1])
+
+
+def calibrate_prediction_intervals(
+    actual: pd.Series,
+    predicted: np.ndarray,
+    lag: pd.Series,
+    coverage: float = INTERVAL_COVERAGE,
+) -> dict[str, Any]:
+    """Calibrate global and production-regime split-conformal intervals."""
+    calibration = pd.DataFrame(
+        {"score": np.abs(actual.to_numpy() - predicted), "lag": lag.to_numpy()}
+    ).dropna()
+    global_radius = conformal_quantile(calibration["score"].to_numpy(), coverage)
+    edges = np.unique(
+        calibration["lag"].quantile([0, 0.25, 0.5, 0.75, 1]).to_numpy(dtype=float)
+    )
+    groups: list[dict[str, Any]] = []
+    if len(edges) >= 2:
+        edges[0], edges[-1] = -np.inf, np.inf
+        bins = pd.cut(calibration["lag"], edges, include_lowest=True)
+        for interval, part in calibration.groupby(bins, observed=True):
+            if len(part) < MIN_CONDITIONAL_CALIBRATION_ROWS:
+                continue
+            groups.append(
+                {
+                    "lower_lag": None if np.isneginf(interval.left) else float(interval.left),
+                    "upper_lag": None if np.isposinf(interval.right) else float(interval.right),
+                    "radius": conformal_quantile(part["score"].to_numpy(), coverage),
+                    "records": int(len(part)),
+                }
+            )
+    return {
+        "method": "mondrian_split_conformal_absolute_residual",
+        "coverage_target": coverage,
+        "global_radius": global_radius,
+        "conditional_feature": LAG_COLUMN,
+        "groups": groups,
+        "calibration_records": int(len(calibration)),
+    }
+
+
+def interval_radii(lag: pd.Series, interval: dict[str, Any]) -> np.ndarray:
+    """Return the matching conditional radius, falling back to the global one."""
+    radii = np.full(len(lag), float(interval["global_radius"]))
+    values = lag.to_numpy(dtype=float)
+    for group in interval.get("groups", []):
+        lower = -np.inf if group["lower_lag"] is None else group["lower_lag"]
+        upper = np.inf if group["upper_lag"] is None else group["upper_lag"]
+        radii[(values > lower) & (values <= upper)] = group["radius"]
+    return radii
 
 
 def _one_hot_preprocessor() -> ColumnTransformer:
@@ -268,11 +384,23 @@ def save_shap_summary(model: Pipeline, sample: pd.DataFrame, report_dir: Path) -
 
 def train(args: argparse.Namespace) -> dict[str, Any]:
     frame = load_and_prepare(args.data)
-    train_frame, test_frame, cutoff = temporal_split(frame, args.test_months)
+    train_frame, validation_frame, calibration_frame, test_frame, cutoffs = (
+        temporal_validation_split(
+            frame, args.validation_months, args.calibration_months, args.test_months
+        )
+    )
     x_train, y_train = train_frame[FEATURES], train_frame[TARGET]
+    x_validation = validation_frame[FEATURES]
+    y_validation = validation_frame[TARGET]
+    x_calibration = calibration_frame[FEATURES]
+    y_calibration = calibration_frame[TARGET]
     x_test, y_test = test_frame[FEATURES], test_frame[TARGET]
 
-    predictions: dict[str, np.ndarray] = {
+    validation_predictions: dict[str, np.ndarray] = {
+        "persistencia": x_validation[LAG_COLUMN].to_numpy(),
+        "media": np.full(len(x_validation), float(y_train.mean())),
+    }
+    test_predictions: dict[str, np.ndarray] = {
         "persistencia": x_test[LAG_COLUMN].to_numpy(),
         "media": np.full(len(x_test), float(y_train.mean())),
     }
@@ -280,24 +408,41 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     for name, candidate in build_candidates(args.include_xgboost).items():
         candidate.fit(x_train, y_train)
         fitted[name] = candidate
-        predictions[name] = candidate.predict(x_test)
+        validation_predictions[name] = candidate.predict(x_validation)
 
-    metrics = {
-        name: regression_metrics(y_test, prediction)
-        for name, prediction in predictions.items()
+    validation_metrics = {
+        name: regression_metrics(y_validation, prediction)
+        for name, prediction in validation_predictions.items()
     }
-    selected_name = min(fitted, key=lambda name: metrics[name]["mae"])
+    selected_name = min(fitted, key=lambda name: validation_metrics[name]["mae"])
+    development_frame = pd.concat([train_frame, validation_frame], ignore_index=True)
+    x_development = development_frame[FEATURES]
+    y_development = development_frame[TARGET]
+    for candidate in fitted.values():
+        candidate.fit(x_development, y_development)
     selected_model = fitted[selected_name]
-    selected_prediction = predictions[selected_name]
-
-    residuals = y_test.to_numpy() - selected_prediction
-    residual_quantiles = {
-        "lower": float(np.quantile(residuals, 0.05)),
-        "upper": float(np.quantile(residuals, 0.95)),
-        "coverage_target": 0.90,
-        "method": "holdout_residual_quantiles",
+    calibration_prediction = selected_model.predict(x_calibration)
+    prediction_interval = calibrate_prediction_intervals(
+        y_calibration, calibration_prediction, x_calibration[LAG_COLUMN]
+    )
+    for name in validation_predictions:
+        if name == "persistencia":
+            test_predictions[name] = x_test[LAG_COLUMN].to_numpy()
+        elif name == "media":
+            test_predictions[name] = np.full(len(x_test), float(y_development.mean()))
+        else:
+            test_predictions[name] = fitted[name].predict(x_test)
+    test_metrics = {
+        name: regression_metrics(y_test, prediction)
+        for name, prediction in test_predictions.items()
     }
-    known_wells = set(train_frame[ID_COLUMN])
+    selected_prediction = test_predictions[selected_name]
+    radii = interval_radii(x_test[LAG_COLUMN], prediction_interval)
+    prediction_interval["test_coverage"] = float(
+        np.mean((y_test.to_numpy() >= np.maximum(0, selected_prediction - radii))
+                & (y_test.to_numpy() <= selected_prediction + radii))
+    )
+    known_wells = set(development_frame[ID_COLUMN])
     evaluation = test_frame[
         [DATE_COLUMN, ID_COLUMN, "provincia", "cuenca", TARGET]
     ].rename(columns={TARGET: "real"})
@@ -313,18 +458,24 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
 
     report = {
         "selected_model": selected_name,
-        "cutoff": cutoff.strftime("%Y-%m-%d"),
+        "selection_metric": "validation_mae",
+        "cutoffs": {name: value.strftime("%Y-%m-%d") for name, value in cutoffs.items()},
         "train_period": [str(train_frame[DATE_COLUMN].min().date()),
                          str(train_frame[DATE_COLUMN].max().date())],
+        "validation_period": [str(validation_frame[DATE_COLUMN].min().date()),
+                              str(validation_frame[DATE_COLUMN].max().date())],
+        "calibration_period": [str(calibration_frame[DATE_COLUMN].min().date()),
+                               str(calibration_frame[DATE_COLUMN].max().date())],
         "test_period": [str(test_frame[DATE_COLUMN].min().date()),
                         str(test_frame[DATE_COLUMN].max().date())],
-        "metrics_by_model": metrics,
+        "validation_metrics_by_model": validation_metrics,
+        "metrics_by_model": test_metrics,
         "metrics_by_province": grouped_metrics(evaluation, "provincia"),
         "metrics_by_basin": grouped_metrics(evaluation, "cuenca"),
         "metrics_by_production_range": grouped_metrics(evaluation, "rango_produccion"),
         "metrics_new_vs_known_wells": grouped_metrics(evaluation, "estado_pozo"),
-        "prediction_interval": residual_quantiles,
-        "drift": drift_report(train_frame, test_frame),
+        "prediction_interval": prediction_interval,
+        "drift": drift_report(development_frame, test_frame),
     }
 
     args.report_dir.mkdir(parents=True, exist_ok=True)
@@ -343,12 +494,18 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     joblib.dump(
         {
             "model": selected_model,
-            "residual_quantiles": residual_quantiles,
+            "prediction_interval": prediction_interval,
             "features": FEATURES,
             "metadata": {
                 "selected_model": selected_name,
-                "trained_until": str(train_frame[DATE_COLUMN].max().date()),
-                "test_from": str(cutoff.date()),
+                "trained_until": str(validation_frame[DATE_COLUMN].max().date()),
+                "validation_from": str(cutoffs["validation"].date()),
+                "calibration_from": str(cutoffs["calibration"].date()),
+                "test_from": str(cutoffs["test"].date()),
+                "prediction_semantics": (
+                    "one_step_ahead_monthly_forecast; every input must be known "
+                    "before the forecast month starts"
+                ),
             },
         },
         args.model,
@@ -362,6 +519,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR)
     parser.add_argument("--test-months", type=int, default=3)
+    parser.add_argument("--validation-months", type=int, default=3)
+    parser.add_argument("--calibration-months", type=int, default=3)
     parser.add_argument("--include-xgboost", action="store_true")
     parser.add_argument("--with-shap", action="store_true")
     return parser.parse_args()
