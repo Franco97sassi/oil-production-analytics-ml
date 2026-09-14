@@ -119,6 +119,7 @@ def test_training_writes_auditable_bundle_from_disjoint_periods(tmp_path):
     data_path = tmp_path / "production.csv"
     model_path = tmp_path / "model.joblib"
     report_dir = tmp_path / "reports"
+    published_metrics_path = tmp_path / "published" / "strict_metrics.json"
     pd.DataFrame(rows).to_csv(data_path, index=False)
     args = argparse.Namespace(
         data=data_path,
@@ -129,6 +130,7 @@ def test_training_writes_auditable_bundle_from_disjoint_periods(tmp_path):
         test_months=2,
         include_xgboost=False,
         with_shap=False,
+        publish_metrics=published_metrics_path,
     )
 
     report = train(args)
@@ -140,3 +142,8 @@ def test_training_writes_auditable_bundle_from_disjoint_periods(tmp_path):
     assert bundle["metadata"]["prediction_semantics"].startswith("one_step_ahead")
     assert (report_dir / "metrics.json").exists()
     assert (report_dir / "holdout_predictions.csv").exists()
+    assert published_metrics_path.exists()
+    assert report["dataset"]["sha256"]
+    assert report["records_by_split"] == {
+        "train": 24, "validation": 8, "calibration": 8, "test": 8,
+    }
