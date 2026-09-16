@@ -5,14 +5,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.train import (
-    calibrate_prediction_intervals,
-    interval_radii,
-    load_and_prepare,
-    temporal_split,
-    temporal_validation_split,
-    train,
-)
+from src.data import load_and_prepare, temporal_split, temporal_validation_split
+from src.modeling import calibrate_prediction_intervals, interval_radii
+from src.train import train
 
 
 def test_lag_is_only_created_for_consecutive_months(tmp_path):
@@ -20,10 +15,17 @@ def test_lag_is_only_created_for_consecutive_months(tmp_path):
     for year, month, production in [(2024, 12, 10), (2025, 1, 12), (2025, 3, 20)]:
         rows.append(
             {
-                "anio": year, "mes": month, "idpozo": "A",
-                "prod_pet": production, "iny_agua": 0, "iny_gas": 0,
-                "tef": 30, "tipoextraccion": "BM", "tipoestado": "activo",
-                "tipopozo": "petrolifero", "provincia": "Neuquén",
+                "anio": year,
+                "mes": month,
+                "idpozo": "A",
+                "prod_pet": production,
+                "iny_agua": 0,
+                "iny_gas": 0,
+                "tef": 30,
+                "tipoextraccion": "BM",
+                "tipoestado": "activo",
+                "tipopozo": "petrolifero",
+                "provincia": "Neuquén",
                 "cuenca": "Neuquina",
             }
         )
@@ -39,10 +41,17 @@ def test_lag_is_only_created_for_consecutive_months(tmp_path):
 
 def test_duplicate_well_month_is_rejected_instead_of_creating_a_false_lag(tmp_path):
     row = {
-        "anio": 2024, "mes": 1, "idpozo": "A", "prod_pet": 10,
-        "iny_agua": 0, "iny_gas": 0, "tef": 30,
-        "tipoextraccion": "BM", "tipoestado": "activo",
-        "tipopozo": "petrolifero", "provincia": "Neuquén",
+        "anio": 2024,
+        "mes": 1,
+        "idpozo": "A",
+        "prod_pet": 10,
+        "iny_agua": 0,
+        "iny_gas": 0,
+        "tef": 30,
+        "tipoextraccion": "BM",
+        "tipoestado": "activo",
+        "tipopozo": "petrolifero",
+        "provincia": "Neuquén",
         "cuenca": "Neuquina",
     }
     path = tmp_path / "duplicates.csv"
@@ -65,9 +74,7 @@ def test_temporal_split_uses_complete_dates():
 
 
 def test_four_way_temporal_split_has_disjoint_ordered_periods():
-    frame = pd.DataFrame(
-        {"fecha": pd.date_range("2023-01-01", periods=13, freq="MS")}
-    )
+    frame = pd.DataFrame({"fecha": pd.date_range("2023-01-01", periods=13, freq="MS")})
 
     training, validation, calibration, test, cutoffs = temporal_validation_split(
         frame, validation_months=2, calibration_months=2, test_months=2
@@ -139,11 +146,17 @@ def test_training_writes_auditable_bundle_from_disjoint_periods(tmp_path):
     assert report["selection_metric"] == "validation_mae"
     assert report["test_period"] == ["2023-12-01", "2024-01-01"]
     assert bundle["prediction_interval"]["calibration_records"] == 8
+    assert bundle["artifact_schema_version"] == 1
+    assert bundle["metadata"]["dataset_sha256"] == report["dataset"]["sha256"]
+    assert bundle["metadata"]["scikit_learn_version"]
     assert bundle["metadata"]["prediction_semantics"].startswith("one_step_ahead")
     assert (report_dir / "metrics.json").exists()
     assert (report_dir / "holdout_predictions.csv").exists()
     assert published_metrics_path.exists()
     assert report["dataset"]["sha256"]
     assert report["records_by_split"] == {
-        "train": 24, "validation": 8, "calibration": 8, "test": 8,
+        "train": 24,
+        "validation": 8,
+        "calibration": 8,
+        "test": 8,
     }

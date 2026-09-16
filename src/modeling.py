@@ -1,4 +1,5 @@
 """Candidate pipelines and conformal prediction intervals."""
+
 import importlib.util
 import math
 from typing import Any
@@ -11,10 +12,19 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from src.config import (CATEGORICAL_FEATURES, INTERVAL_COVERAGE, LAG_COLUMN,
-                        MIN_CONDITIONAL_CALIBRATION_ROWS, NUMERIC_FEATURES, RANDOM_STATE)
+from src.config import (
+    CATEGORICAL_FEATURES,
+    INTERVAL_COVERAGE,
+    LAG_COLUMN,
+    MIN_CONDITIONAL_CALIBRATION_ROWS,
+    NUMERIC_FEATURES,
+    RANDOM_STATE,
+)
 
-def conformal_quantile(scores: np.ndarray, coverage: float = INTERVAL_COVERAGE) -> float:
+
+def conformal_quantile(
+    scores: np.ndarray, coverage: float = INTERVAL_COVERAGE
+) -> float:
     """Finite-sample split-conformal quantile for absolute residual scores."""
     clean = np.asarray(scores, dtype=float)
     clean = clean[np.isfinite(clean)]
@@ -47,8 +57,12 @@ def calibrate_prediction_intervals(
                 continue
             groups.append(
                 {
-                    "lower_lag": None if np.isneginf(interval.left) else float(interval.left),
-                    "upper_lag": None if np.isposinf(interval.right) else float(interval.right),
+                    "lower_lag": None
+                    if np.isneginf(interval.left)
+                    else float(interval.left),
+                    "upper_lag": None
+                    if np.isposinf(interval.right)
+                    else float(interval.right),
                     "radius": conformal_quantile(part["score"].to_numpy(), coverage),
                     "records": int(len(part)),
                 }
@@ -83,8 +97,10 @@ def _one_hot_preprocessor() -> ColumnTransformer:
         ]
     )
     return ColumnTransformer(
-        [("numeric", numeric, NUMERIC_FEATURES),
-         ("categorical", categorical, CATEGORICAL_FEATURES)]
+        [
+            ("numeric", numeric, NUMERIC_FEATURES),
+            ("categorical", categorical, CATEGORICAL_FEATURES),
+        ]
     )
 
 
@@ -95,15 +111,15 @@ def _ordinal_preprocessor() -> ColumnTransformer:
             ("imputer", SimpleImputer(strategy="most_frequent")),
             (
                 "encoder",
-                OrdinalEncoder(
-                    handle_unknown="use_encoded_value", unknown_value=-1
-                ),
+                OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
             ),
         ]
     )
     return ColumnTransformer(
-        [("numeric", numeric, NUMERIC_FEATURES),
-         ("categorical", categorical, CATEGORICAL_FEATURES)]
+        [
+            ("numeric", numeric, NUMERIC_FEATURES),
+            ("categorical", categorical, CATEGORICAL_FEATURES),
+        ]
     )
 
 
@@ -158,5 +174,3 @@ def build_candidates(include_xgboost: bool = False) -> dict[str, Any]:
             ]
         )
     return candidates
-
-

@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 import src.main as main
 
-
 client = TestClient(main.app)
 
 
@@ -16,7 +15,7 @@ VALID_PAYLOAD = {
     "tipopozo": "Petrolífero",
     "provincia": "Santa Cruz",
     "cuenca": "GOLFO SAN JORGE",
-    "prod_pet_lag1": 50
+    "prod_pet_lag1": 50,
 }
 
 

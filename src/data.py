@@ -1,10 +1,19 @@
 """Dataset validation, feature preparation, and temporal splitting."""
+
 from pathlib import Path
 
 import pandas as pd
 
-from src.config import (DATE_COLUMN, ID_COLUMN, LAG_COLUMN, OPERATIONAL_COLUMNS,
-                        OPERATIONAL_LAG_COLUMNS, REQUIRED_COLUMNS, TARGET)
+from src.config import (
+    DATE_COLUMN,
+    ID_COLUMN,
+    LAG_COLUMN,
+    OPERATIONAL_COLUMNS,
+    OPERATIONAL_LAG_COLUMNS,
+    REQUIRED_COLUMNS,
+    TARGET,
+)
+
 
 def load_and_prepare(path: Path) -> pd.DataFrame:
     """Load data and construct a strictly consecutive, well-level monthly lag."""
@@ -32,7 +41,9 @@ def load_and_prepare(path: Path) -> pd.DataFrame:
     previous_production = frame.groupby(ID_COLUMN, sort=False)[TARGET].shift(1)
     consecutive = frame[DATE_COLUMN].eq(previous_date + pd.offsets.MonthBegin(1))
     frame[LAG_COLUMN] = previous_production.where(consecutive)
-    for source, lagged in zip(OPERATIONAL_COLUMNS, OPERATIONAL_LAG_COLUMNS):
+    for source, lagged in zip(
+        OPERATIONAL_COLUMNS, OPERATIONAL_LAG_COLUMNS, strict=True
+    ):
         previous_value = frame.groupby(ID_COLUMN, sort=False)[source].shift(1)
         frame[lagged] = previous_value.where(consecutive)
 
@@ -62,7 +73,9 @@ def temporal_validation_split(
     validation_months: int = 3,
     calibration_months: int = 3,
     test_months: int = 3,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.Timestamp]]:
+) -> tuple[
+    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.Timestamp]
+]:
     """Create disjoint train, model-selection, calibration and final-test periods."""
     sizes = {
         "validation_months": validation_months,
@@ -87,14 +100,17 @@ def temporal_validation_split(
         & (frame[DATE_COLUMN] < calibration_cutoff)
     ].copy()
     calibration_frame = frame[
-        (frame[DATE_COLUMN] >= calibration_cutoff)
-        & (frame[DATE_COLUMN] < test_cutoff)
+        (frame[DATE_COLUMN] >= calibration_cutoff) & (frame[DATE_COLUMN] < test_cutoff)
     ].copy()
     test_frame = frame[frame[DATE_COLUMN] >= test_cutoff].copy()
-    return train_frame, validation_frame, calibration_frame, test_frame, {
-        "validation": validation_cutoff,
-        "calibration": calibration_cutoff,
-        "test": test_cutoff,
-    }
-
-
+    return (
+        train_frame,
+        validation_frame,
+        calibration_frame,
+        test_frame,
+        {
+            "validation": validation_cutoff,
+            "calibration": calibration_cutoff,
+            "test": test_cutoff,
+        },
+    )
