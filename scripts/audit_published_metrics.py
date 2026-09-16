@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 METRICS_PATH = PROJECT_ROOT / "docs" / "metrics" / "notebook_metrics.json"
 
@@ -48,8 +47,13 @@ def parse_monthly_metrics(text: str) -> list[dict[str, float | int]]:
     if len(rows) != 3:
         raise ValueError("Se esperaban exactamente tres filas mensuales auditables.")
     return [
-        {"month": int(month), "records": int(records), "mae": float(mae),
-         "rmse": float(rmse), "r2": float(r2)}
+        {
+            "month": int(month),
+            "records": int(records),
+            "mae": float(mae),
+            "rmse": float(rmse),
+            "r2": float(r2),
+        }
         for month, records, mae, rmse, r2 in rows
     ]
 

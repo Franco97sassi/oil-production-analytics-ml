@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_PATH: /app/models/modelo_produccion_petroleo.joblib
+    volumes:
+      - ./models:/app/models:ro

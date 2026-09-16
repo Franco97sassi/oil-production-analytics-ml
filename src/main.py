@@ -1,28 +1,47 @@
+import os
 from pathlib import Path
+from typing import Any
 
 import joblib
 import pandas as pd
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
 
 app = FastAPI(
     title="Oil Production Prediction API",
     description="API para predecir producción mensual de petróleo por pozo",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Absolute paths based on the project location
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = PROJECT_ROOT / "models" / "modelo_produccion_petroleo.joblib"
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "modelo_produccion_petroleo.joblib"
+MODEL_PATH = Path(os.getenv("MODEL_PATH", DEFAULT_MODEL_PATH))
+SUPPORTED_ARTIFACT_SCHEMA_VERSION = 1
 
 
-def load_model():
-    if not MODEL_PATH.exists():
+def validate_model_bundle(bundle: Any) -> None:
+    """Fail fast when a current artifact cannot satisfy the API contract."""
+    if not isinstance(bundle, dict):
+        return
+    required = {"model", "features", "metadata", "artifact_schema_version"}
+    missing = sorted(required - bundle.keys())
+    if missing:
+        raise ValueError(f"Artefacto inválido; faltan campos: {', '.join(missing)}")
+    if bundle["artifact_schema_version"] != SUPPORTED_ARTIFACT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Versión de artefacto no soportada: {bundle['artifact_schema_version']}"
+        )
+    if not hasattr(bundle["model"], "predict"):
+        raise ValueError("Artefacto inválido; el modelo no implementa predict().")
+
+
+def load_model(path: Path = MODEL_PATH) -> Any | None:
+    if not path.exists():
         return None
-
-    return joblib.load(MODEL_PATH)
+    bundle = joblib.load(path)
+    validate_model_bundle(bundle)
+    return bundle
 
 
 model_bundle = load_model()
@@ -33,56 +52,39 @@ class PredictionInput(BaseModel):
 
     All operational measurements refer to the previous completed month.
     """
+
     mes: int = Field(
-        ge=1,
-        le=12,
-        description="Mes calendario de la observación, entre 1 y 12"
+        ge=1, le=12, description="Mes calendario de la observación, entre 1 y 12"
     )
 
     iny_agua_lag1: float = Field(
-        ge=0,
-        description="Volumen de agua inyectada en el mes anterior"
+        ge=0, description="Volumen de agua inyectada en el mes anterior"
     )
 
     iny_gas_lag1: float = Field(
-        ge=0,
-        description="Volumen de gas inyectado en el mes anterior"
+        ge=0, description="Volumen de gas inyectado en el mes anterior"
     )
 
     tef_lag1: float = Field(
-        ge=0,
-        le=31,
-        description="Días efectivos de funcionamiento en el mes anterior"
+        ge=0, le=31, description="Días efectivos de funcionamiento en el mes anterior"
     )
 
     tipoextraccion: str = Field(
-        min_length=1,
-        description="Método de extracción utilizado por el pozo"
+        min_length=1, description="Método de extracción utilizado por el pozo"
     )
 
-    tipoestado: str = Field(
-        min_length=1,
-        description="Estado operativo del pozo"
-    )
+    tipoestado: str = Field(min_length=1, description="Estado operativo del pozo")
 
-    tipopozo: str = Field(
-        min_length=1,
-        description="Tipo de pozo"
-    )
+    tipopozo: str = Field(min_length=1, description="Tipo de pozo")
 
     provincia: str = Field(
-        min_length=1,
-        description="Provincia donde se encuentra el pozo"
+        min_length=1, description="Provincia donde se encuentra el pozo"
     )
 
-    cuenca: str = Field(
-        min_length=1,
-        description="Cuenca hidrocarburífera"
-    )
+    cuenca: str = Field(min_length=1, description="Cuenca hidrocarburífera")
 
     prod_pet_lag1: float = Field(
-        ge=0,
-        description="Producción de petróleo registrada en el período anterior"
+        ge=0, description="Producción de petróleo registrada en el período anterior"
     )
 
     model_config = {
@@ -97,7 +99,7 @@ class PredictionInput(BaseModel):
                 "tipopozo": "Petrolífero",
                 "provincia": "Santa Cruz",
                 "cuenca": "GOLFO SAN JORGE",
-                "prod_pet_lag1": 50
+                "prod_pet_lag1": 50,
             }
         }
     }
@@ -108,16 +110,31 @@ def root():
     return {
         "message": "Oil Production Prediction API",
         "status": "running",
-        "model_loaded": model_bundle is not None
+        "model_loaded": model_bundle is not None,
     }
 
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "model_loaded": model_bundle is not None
-    }
+    """Backwards-compatible summary health endpoint."""
+    return {"status": "ok", "model_loaded": model_bundle is not None}
+
+
+@app.get("/health/live")
+def liveness():
+    """Report that the API process is alive, regardless of model availability."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+def readiness():
+    """Report whether this instance can currently serve predictions."""
+    if model_bundle is None:
+        raise HTTPException(
+            status_code=503,
+            detail="La API está activa, pero el modelo no está disponible.",
+        )
+    return {"status": "ready", "model_loaded": True}
 
 
 @app.get("/model-info")
@@ -129,6 +146,7 @@ def model_info():
         return {"artifact_format": "legacy", "metadata": {}}
     return {
         "artifact_format": "bundle",
+        "artifact_schema_version": model_bundle.get("artifact_schema_version"),
         "features": model_bundle.get("features", []),
         "metadata": model_bundle.get("metadata", {}),
         "prediction_interval": model_bundle.get("prediction_interval", {}).get(
@@ -165,7 +183,7 @@ def _predict_one(data: PredictionInput) -> dict:
         model = model_bundle
         prediction_interval = residual_quantiles = None
     prediction = float(model.predict(pd.DataFrame([data.model_dump()]))[0])
-    response = {"produccion_predicha": round(max(0.0, prediction), 2)}
+    response: dict[str, Any] = {"produccion_predicha": round(max(0.0, prediction), 2)}
     if prediction_interval:
         radius = _interval_radius(prediction_interval, data.prod_pet_lag1)
         response["intervalo_prediccion_90"] = {
@@ -190,5 +208,7 @@ def predict_batch(rows: list[PredictionInput]):
     if not rows:
         raise HTTPException(status_code=422, detail="El lote no puede estar vacío.")
     if len(rows) > 1000:
-        raise HTTPException(status_code=413, detail="Máximo 1000 observaciones por lote.")
+        raise HTTPException(
+            status_code=413, detail="Máximo 1000 observaciones por lote."
+        )
     return {"predicciones": [_predict_one(row) for row in rows]}

@@ -1,4 +1,5 @@
 """Evaluation metrics, drift diagnostics, and generated visualizations."""
+
 import importlib.util
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from sklearn.pipeline import Pipeline
 
 from src.config import CATEGORICAL_FEATURES, NUMERIC_FEATURES, RANDOM_STATE
 
+
 def regression_metrics(actual: pd.Series, predicted: np.ndarray) -> dict[str, float]:
     return {
         "mae": float(mean_absolute_error(actual, predicted)),
@@ -20,9 +22,7 @@ def regression_metrics(actual: pd.Series, predicted: np.ndarray) -> dict[str, fl
     }
 
 
-def grouped_metrics(
-    evaluation: pd.DataFrame, group: str
-) -> list[dict[str, Any]]:
+def grouped_metrics(evaluation: pd.DataFrame, group: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for value, part in evaluation.groupby(group, observed=True, dropna=False):
         metrics = regression_metrics(part["real"], part["predicha"].to_numpy())
@@ -40,8 +40,15 @@ def population_stability_index(train: pd.Series, test: pd.Series) -> float:
     if len(edges) < 2:
         return 0.0
     edges[0], edges[-1] = -np.inf, np.inf
-    train_share = pd.cut(train, edges, include_lowest=True).value_counts(normalize=True)
-    test_share = pd.cut(test, edges, include_lowest=True).value_counts(normalize=True)
+    # Convert NumPy's generic ndarray to the concrete sequence expected by
+    # pandas-stubs. Pandas accepts both representations at runtime.
+    bin_edges = [float(edge) for edge in edges]
+    train_share = pd.cut(train, bin_edges, include_lowest=True).value_counts(
+        normalize=True
+    )
+    test_share = pd.cut(test, bin_edges, include_lowest=True).value_counts(
+        normalize=True
+    )
     train_share, test_share = train_share.align(test_share, fill_value=0)
     train_share = train_share.clip(lower=1e-6)
     test_share = test_share.clip(lower=1e-6)
@@ -69,8 +76,11 @@ def save_plots(evaluation: pd.DataFrame, report_dir: Path) -> None:
     axis.scatter(sample["real"], sample["predicha"], alpha=0.25, s=10)
     limit = float(max(sample["real"].max(), sample["predicha"].max()))
     axis.plot([0, limit], [0, limit], "--", color="black")
-    axis.set(xlabel="Producción real (m³)", ylabel="Producción predicha (m³)",
-             title="Producción real vs. predicha — holdout temporal")
+    axis.set(
+        xlabel="Producción real (m³)",
+        ylabel="Producción predicha (m³)",
+        title="Producción real vs. predicha — holdout temporal",
+    )
     figure.tight_layout()
     figure.savefig(report_dir / "model_real_vs_predicted.png", dpi=160)
     plt.close(figure)
@@ -78,8 +88,9 @@ def save_plots(evaluation: pd.DataFrame, report_dir: Path) -> None:
     monthly = evaluation.groupby("fecha", observed=True)[["real", "predicha"]].sum()
     figure, axis = plt.subplots(figsize=(9, 5))
     monthly.plot(ax=axis, marker="o")
-    axis.set(xlabel="Mes", ylabel="Producción (m³)",
-             title="Producción mensual en el holdout")
+    axis.set(
+        xlabel="Mes", ylabel="Producción (m³)", title="Producción mensual en el holdout"
+    )
     figure.tight_layout()
     figure.savefig(report_dir / "model_monthly_holdout.png", dpi=160)
     plt.close(figure)
@@ -99,5 +110,3 @@ def save_shap_summary(model: Pipeline, sample: pd.DataFrame, report_dir: Path) -
     ).sort_values("mean_abs_shap", ascending=False)
     importance.to_csv(report_dir / "shap_importance.csv", index=False)
     return "reports/shap_importance.csv"
-
-

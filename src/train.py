@@ -1,27 +1,43 @@
 """Offline orchestration for training, evaluation, and artifact publication."""
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 
 from src.config import (
-    DATE_COLUMN, DEFAULT_DATA_PATH, DEFAULT_MODEL_PATH, DEFAULT_PUBLISHED_METRICS_PATH,
-    DEFAULT_REPORT_DIR, FEATURES, ID_COLUMN, LAG_COLUMN, RANDOM_STATE, TARGET,
+    DATE_COLUMN,
+    DEFAULT_DATA_PATH,
+    DEFAULT_MODEL_PATH,
+    DEFAULT_PUBLISHED_METRICS_PATH,
+    DEFAULT_REPORT_DIR,
+    FEATURES,
+    ID_COLUMN,
+    LAG_COLUMN,
+    RANDOM_STATE,
+    TARGET,
 )
-from src.data import load_and_prepare, temporal_split, temporal_validation_split
+from src.data import load_and_prepare, temporal_validation_split
 from src.evaluation import (
-    drift_report, grouped_metrics, regression_metrics, save_plots, save_shap_summary,
+    drift_report,
+    grouped_metrics,
+    regression_metrics,
+    save_plots,
+    save_shap_summary,
 )
 from src.modeling import (
-    build_candidates, calibrate_prediction_intervals, interval_radii,
+    build_candidates,
+    calibrate_prediction_intervals,
+    interval_radii,
 )
 
 
@@ -98,8 +114,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     selected_prediction = test_predictions[selected_name]
     radii = interval_radii(x_test[LAG_COLUMN], prediction_interval)
     prediction_interval["test_coverage"] = float(
-        np.mean((y_test.to_numpy() >= np.maximum(0, selected_prediction - radii))
-                & (y_test.to_numpy() <= selected_prediction + radii))
+        np.mean(
+            (y_test.to_numpy() >= np.maximum(0, selected_prediction - radii))
+            & (y_test.to_numpy() <= selected_prediction + radii)
+        )
     )
     known_wells = set(development_frame[ID_COLUMN])
     evaluation = test_frame[
@@ -115,9 +133,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         labels=["0–10", "10–100", "100–500", ">500"],
     )
 
-    report = {
+    report: dict[str, Any] = {
         "report_schema_version": 1,
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_utc": datetime.now(UTC).isoformat(),
         "dataset": {
             "filename": args.data.name,
             "sha256": _sha256(args.data),
@@ -125,15 +143,25 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         },
         "selected_model": selected_name,
         "selection_metric": "validation_mae",
-        "cutoffs": {name: value.strftime("%Y-%m-%d") for name, value in cutoffs.items()},
-        "train_period": [str(train_frame[DATE_COLUMN].min().date()),
-                         str(train_frame[DATE_COLUMN].max().date())],
-        "validation_period": [str(validation_frame[DATE_COLUMN].min().date()),
-                              str(validation_frame[DATE_COLUMN].max().date())],
-        "calibration_period": [str(calibration_frame[DATE_COLUMN].min().date()),
-                               str(calibration_frame[DATE_COLUMN].max().date())],
-        "test_period": [str(test_frame[DATE_COLUMN].min().date()),
-                        str(test_frame[DATE_COLUMN].max().date())],
+        "cutoffs": {
+            name: value.strftime("%Y-%m-%d") for name, value in cutoffs.items()
+        },
+        "train_period": [
+            str(train_frame[DATE_COLUMN].min().date()),
+            str(train_frame[DATE_COLUMN].max().date()),
+        ],
+        "validation_period": [
+            str(validation_frame[DATE_COLUMN].min().date()),
+            str(validation_frame[DATE_COLUMN].max().date()),
+        ],
+        "calibration_period": [
+            str(calibration_frame[DATE_COLUMN].min().date()),
+            str(calibration_frame[DATE_COLUMN].max().date()),
+        ],
+        "test_period": [
+            str(test_frame[DATE_COLUMN].min().date()),
+            str(test_frame[DATE_COLUMN].max().date()),
+        ],
         "records_by_split": {
             "train": int(len(train_frame)),
             "validation": int(len(validation_frame)),
@@ -154,7 +182,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     save_plots(evaluation, args.report_dir)
     if args.with_shap:
         report["shap"] = save_shap_summary(
-            selected_model, x_test.sample(min(1000, len(x_test)), random_state=RANDOM_STATE),
+            selected_model,
+            x_test.sample(min(1000, len(x_test)), random_state=RANDOM_STATE),
             args.report_dir,
         )
     _write_json(report, args.report_dir / "metrics.json")
@@ -166,11 +195,15 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     args.model.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {
+            "artifact_schema_version": 1,
             "model": selected_model,
             "prediction_interval": prediction_interval,
             "features": FEATURES,
             "metadata": {
                 "selected_model": selected_name,
+                "dataset_sha256": report["dataset"]["sha256"],
+                "python_contract": "3.12",
+                "scikit_learn_version": sklearn.__version__,
                 "trained_until": str(validation_frame[DATE_COLUMN].max().date()),
                 "validation_from": str(cutoffs["validation"].date()),
                 "calibration_from": str(cutoffs["calibration"].date()),

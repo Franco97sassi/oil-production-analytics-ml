@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 CSV_PATH = BASE_DIR / "data" / "produccion.csv"
@@ -40,9 +39,7 @@ def main():
 
         connection.commit()
 
-        total = cursor.execute(
-            "SELECT COUNT(*) FROM produccion"
-        ).fetchone()[0]
+        total = cursor.execute("SELECT COUNT(*) FROM produccion").fetchone()[0]
 
         print(f"Registros en SQLite: {total:,}")
         print(f"Base creada correctamente en: {DB_PATH}")
