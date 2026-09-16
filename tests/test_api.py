@@ -1,7 +1,7 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import src.main as main
-
 
 client = TestClient(main.app)
 
@@ -29,6 +29,53 @@ def test_health():
     assert "model_loaded" in data
 
 
+def test_liveness_does_not_depend_on_model(monkeypatch):
+    monkeypatch.setattr(main, "model_bundle", None)
+
+    response = client.get("/health/live")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "alive"}
+
+
+def test_readiness_requires_a_loaded_model(monkeypatch):
+    monkeypatch.setattr(main, "model_bundle", None)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+
+
+def test_readiness_succeeds_with_a_loaded_model(monkeypatch):
+    monkeypatch.setattr(main, "model_bundle", object())
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "model_loaded": True}
+
+
+def test_current_artifact_contract_rejects_missing_fields():
+    with pytest.raises(ValueError, match="faltan campos"):
+        main.validate_model_bundle({"model": object()})
+
+
+def test_current_artifact_contract_rejects_unknown_version():
+    class FakeModel:
+        def predict(self, data):
+            return [1]
+
+    with pytest.raises(ValueError, match="no soportada"):
+        main.validate_model_bundle(
+            {
+                "artifact_schema_version": 99,
+                "model": FakeModel(),
+                "features": [],
+                "metadata": {},
+            }
+        )
+
+
 def test_predict_without_model(monkeypatch):
     monkeypatch.setattr(main, "model_bundle", None)
 
@@ -42,7 +89,7 @@ def test_predict_without_model(monkeypatch):
         "tipopozo": "Petrolífero",
         "provincia": "Santa Cruz",
         "cuenca": "GOLFO SAN JORGE",
-        "prod_pet_lag1": 50
+        "prod_pet_lag1": 50,
     }
 
     response = client.post("/predict", json=payload)
@@ -99,23 +146,28 @@ def test_predict_uses_conditional_conformal_interval(monkeypatch):
             "model": FakeModel(),
             "prediction_interval": {
                 "global_radius": 10,
-                "groups": [
-                    {"lower_lag": None, "upper_lag": 100, "radius": 3}
-                ],
+                "groups": [{"lower_lag": None, "upper_lag": 100, "radius": 3}],
             },
         },
     )
     payload = {
-        "mes": 10, "iny_agua_lag1": 0, "iny_gas_lag1": 0, "tef_lag1": 31,
-        "tipoextraccion": "BM", "tipoestado": "activo",
-        "tipopozo": "petrolifero", "provincia": "Santa Cruz",
-        "cuenca": "Golfo San Jorge", "prod_pet_lag1": 50,
+        "mes": 10,
+        "iny_agua_lag1": 0,
+        "iny_gas_lag1": 0,
+        "tef_lag1": 31,
+        "tipoextraccion": "BM",
+        "tipoestado": "activo",
+        "tipopozo": "petrolifero",
+        "provincia": "Santa Cruz",
+        "cuenca": "Golfo San Jorge",
+        "prod_pet_lag1": 50,
     }
 
     response = client.post("/predict", json=payload)
 
     assert response.json()["intervalo_prediccion_90"] == {
-        "inferior": 47.0, "superior": 53.0
+        "inferior": 47.0,
+        "superior": 53.0,
     }
 
 
@@ -135,10 +187,16 @@ def test_batch_prediction_and_model_info(monkeypatch):
         },
     )
     payload = {
-        "mes": 10, "iny_agua_lag1": 0, "iny_gas_lag1": 0, "tef_lag1": 31,
-        "tipoextraccion": "BM", "tipoestado": "activo",
-        "tipopozo": "petrolifero", "provincia": "Santa Cruz",
-        "cuenca": "Golfo San Jorge", "prod_pet_lag1": 50,
+        "mes": 10,
+        "iny_agua_lag1": 0,
+        "iny_gas_lag1": 0,
+        "tef_lag1": 31,
+        "tipoextraccion": "BM",
+        "tipoestado": "activo",
+        "tipopozo": "petrolifero",
+        "provincia": "Santa Cruz",
+        "cuenca": "Golfo San Jorge",
+        "prod_pet_lag1": 50,
     }
 
     batch = client.post("/predict/batch", json=[payload, payload])

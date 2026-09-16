@@ -6,6 +6,31 @@ End-to-end **Data Analytics and Machine Learning project** focused on analyzing 
 
 The project covers the complete workflow from exploratory data analysis and feature engineering to temporal validation, model evaluation, serialization, and deployment through a REST API.
 
+> **Portfolio status:** the code, automated tests and historical notebook
+> benchmark are reproducible. The definitive strict-temporal metrics and visual
+> demo still require the complete official dataset and Power BI screenshots.
+> Follow the owner checklist in [`docs/PORTFOLIO_GUIDE.md`](docs/PORTFOLIO_GUIDE.md)
+> before sending the project to recruiters.
+
+## ✅ Verified and auditable results
+
+- The historical notebook benchmark is automatically checked against its saved
+  outputs in CI; it is not presented as the definitive strict-temporal result.
+- The production training command records the dataset SHA-256, exact temporal
+  periods, split sizes, baselines, segmented errors, drift and conformal
+  coverage in one machine-readable report.
+- The strict result will be displayed here after training on the complete
+  official dataset with `python -m src.train --publish-metrics`.
+
+## 🎬 Demo
+
+- **API:** train the model, run `docker compose up --build`, and open
+  [Swagger UI](http://localhost:8000/docs).
+- **Power BI:** screenshots and the short portfolio walkthrough are pending the
+  owner steps documented in [`docs/PORTFOLIO_GUIDE.md`](docs/PORTFOLIO_GUIDE.md).
+- **Health:** liveness is available at `/health/live`; readiness at
+  `/health/ready` returns HTTP 503 until a valid model artifact is mounted.
+
 ---
 
 ## 📌 Project Overview
@@ -262,6 +287,9 @@ The analysis also showed that models without historical production tended to und
 
 ![Arquitectura del proyecto](docs/architecture.svg)
 
+The deployment-oriented component and data-flow diagram is documented in
+[`docs/production-architecture.md`](docs/production-architecture.md).
+
 El entrenamiento y la evaluación son procesos **offline**. La API es un
 proceso **online** separado que solamente carga el artefacto y sirve
 predicciones; nunca reentrena durante una petición.
@@ -365,14 +393,30 @@ source venv/bin/activate
 
 ### 4. Install dependencies
 
+Choose the smallest dependency group that matches the task:
+
 ```bash
-pip install -r requirements-ci.txt
+pip install -r requirements-api.txt    # prediction service only
+pip install -r requirements-train.txt  # API + training and notebooks
+pip install -r requirements-dev.txt    # all of the above + quality tooling
 ```
 
 The supported interpreter is Python 3.12, declared in `.python-version` and
 used by CI. All direct runtime, analysis and test dependencies are pinned in the
 UTF-8 encoded `requirements-ci.txt`, so local and CI runs resolve the same declared
 versions.
+
+### Run with Docker
+
+After training has created `models/modelo_produccion_petroleo.joblib`, start the
+containerized API with:
+
+```bash
+docker compose up --build
+```
+
+The image runs as a non-root user and mounts `models/` read-only. The
+`MODEL_PATH` environment variable can point the API to a different artifact.
 
 ### 5. Download and train
 

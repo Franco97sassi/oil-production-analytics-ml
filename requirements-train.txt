@@ -1,0 +1,5 @@
+-r requirements-api.txt
+
+# Offline training, reporting, and notebook analysis.
+matplotlib==3.11.1
+jupyter==1.1.1
