@@ -51,7 +51,11 @@ def calibrate_prediction_intervals(
     groups: list[dict[str, Any]] = []
     if len(edges) >= 2:
         edges[0], edges[-1] = -np.inf, np.inf
-        bins = pd.cut(calibration["lag"], edges, include_lowest=True)
+        # pandas-stubs does not accept NumPy's generic ndarray as the ``bins``
+        # argument even though pandas supports it at runtime.  A concrete list
+        # also makes the boundary type explicit for static checking in CI.
+        bin_edges = [float(edge) for edge in edges]
+        bins = pd.cut(calibration["lag"], bin_edges, include_lowest=True)
         for interval, part in calibration.groupby(bins, observed=True):
             if len(part) < MIN_CONDITIONAL_CALIBRATION_ROWS:
                 continue

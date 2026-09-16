@@ -40,8 +40,15 @@ def population_stability_index(train: pd.Series, test: pd.Series) -> float:
     if len(edges) < 2:
         return 0.0
     edges[0], edges[-1] = -np.inf, np.inf
-    train_share = pd.cut(train, edges, include_lowest=True).value_counts(normalize=True)
-    test_share = pd.cut(test, edges, include_lowest=True).value_counts(normalize=True)
+    # Convert NumPy's generic ndarray to the concrete sequence expected by
+    # pandas-stubs. Pandas accepts both representations at runtime.
+    bin_edges = [float(edge) for edge in edges]
+    train_share = pd.cut(train, bin_edges, include_lowest=True).value_counts(
+        normalize=True
+    )
+    test_share = pd.cut(test, bin_edges, include_lowest=True).value_counts(
+        normalize=True
+    )
     train_share, test_share = train_share.align(test_share, fill_value=0)
     train_share = train_share.clip(lower=1e-6)
     test_share = test_share.clip(lower=1e-6)
